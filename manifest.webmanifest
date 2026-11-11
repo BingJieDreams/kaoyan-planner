@@ -1,0 +1,20 @@
+{
+  "name": "冲刺 · 考研规划",
+  "short_name": "冲刺",
+  "description": "11.11–12.11 固定时刻表：单词、数学、408、英语阅读、政治全程倒计时与任务跟进",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080b11",
+  "theme_color": "#080b11",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
