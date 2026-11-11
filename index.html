@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#080b11" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="冲刺" />
+<title>冲刺 · 考研规划</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="assets/icon.svg" />
+<link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body>
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="i-today" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20V14"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 7.5l3 3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10M8 11l4 4 4-4M4 20h16"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V10M8 13l4-4 4 4M4 4h16"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3L12 4z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-drag" viewBox="0 0 24 24"><path d="M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand__mark"><svg class="icon"><use href="#i-target"/></svg></div>
+      <div class="brand__text"><b>冲刺</b><span>考研规划 · 三色进度</span></div>
+    </div>
+
+    <nav class="nav" aria-label="主导航">
+      <button class="nav__item" data-action="nav" data-view="today">
+        <svg class="icon"><use href="#i-today"/></svg><span>今日</span><em class="nav__badge" id="navBadgeToday" hidden></em>
+      </button>
+      <button class="nav__item" data-action="nav" data-view="schedule">
+        <svg class="icon"><use href="#i-calendar"/></svg><span>排期</span>
+      </button>
+      <button class="nav__item" data-action="nav" data-view="tasks">
+        <svg class="icon"><use href="#i-tasks"/></svg><span>任务库</span>
+      </button>
+      <button class="nav__item" data-action="nav" data-view="review">
+        <svg class="icon"><use href="#i-chart"/></svg><span>复盘</span>
+      </button>
+      <button class="nav__item" data-action="nav" data-view="settings">
+        <svg class="icon"><use href="#i-settings"/></svg><span>设置</span>
+      </button>
+    </nav>
+
+    <div class="sidebar__foot">
+      <div class="mini-count">
+        <span>距离初试</span>
+        <b><i id="sideDays">--</i> 天</b>
+        <em id="sideExam">--</em>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar__title">
+        <h1 id="pageTitle">今日</h1>
+        <p id="pageSub"></p>
+      </div>
+      <div class="topbar__actions">
+        <button class="btn btn--ghost btn--sm" data-action="auto-schedule">
+          <svg class="icon"><use href="#i-refresh"/></svg><span>自动排期</span>
+        </button>
+        <button class="btn btn--primary" data-action="new-task">
+          <svg class="icon"><use href="#i-plus"/></svg><span>新建任务</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="view" id="view-today" aria-live="polite"></section>
+    <section class="view" id="view-schedule"></section>
+    <section class="view" id="view-tasks"></section>
+    <section class="view" id="view-review"></section>
+    <section class="view" id="view-settings"></section>
+  </main>
+</div>
+
+<nav class="tabbar" aria-label="底部导航">
+  <button data-action="nav" data-view="today"><svg class="icon"><use href="#i-today"/></svg><span>今日</span><i class="tabbar__dot" id="tabDot" hidden></i></button>
+  <button data-action="nav" data-view="schedule"><svg class="icon"><use href="#i-calendar"/></svg><span>排期</span></button>
+  <button data-action="nav" data-view="tasks"><svg class="icon"><use href="#i-tasks"/></svg><span>任务库</span></button>
+  <button data-action="nav" data-view="review"><svg class="icon"><use href="#i-chart"/></svg><span>复盘</span></button>
+  <button data-action="nav" data-view="settings"><svg class="icon"><use href="#i-settings"/></svg><span>设置</span></button>
+</nav>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal__backdrop" data-action="close-modal"></div>
+  <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <header class="modal__head">
+      <h2 id="modalTitle">标题</h2>
+      <button class="icon-btn" data-action="close-modal" aria-label="关闭">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </header>
+    <div class="modal__body" id="modalBody"></div>
+    <footer class="modal__foot" id="modalFoot"></footer>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="assets/js/seed.js"></script>
+<script src="assets/js/scheduler.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
