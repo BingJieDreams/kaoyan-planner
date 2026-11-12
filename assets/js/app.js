@@ -149,6 +149,7 @@
       try { localStorage.setItem(BACKUP_KEY, raw); } catch (e3) { /* ignore */ }
       toast('保存失败：本地存储空间不足');
     }
+    scheduleSync();
   }
 
   if (firstRun) saveState();
@@ -164,6 +165,207 @@
 
   if (recoveredFromBackup) {
     setTimeout(function () { toast('已从本地备份恢复数据'); }, 800);
+  }
+
+  /* ================= 云同步：私有 Gist（清缓存 / 换设备都能恢复） ================= */
+  var SYNC_KEY = 'kaoyan-planner-sync';
+  var sync = { token: '', gistId: '', lastSync: 0, lastError: '' };
+  var syncTimer = null;
+  var applyingRemote = false;
+  try {
+    var storedSync = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
+    if (storedSync && storedSync.token) sync = Object.assign(sync, storedSync);
+  } catch (e) { /* ignore */ }
+
+  function saveSync() {
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch (e) { /* ignore */ }
+  }
+
+  function ghHeaders() {
+    return {
+      Authorization: 'Bearer ' + sync.token,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    };
+  }
+
+  function syncText() {
+    if (!sync.token) return '未开启。开启后数据自动备份到你的私有 Gist，清缓存或换设备都能恢复。';
+    if (sync.lastError) return '同步异常：' + sync.lastError;
+    if (!sync.lastSync) return '已连接，等待首次同步…';
+    return '上次同步：' + new Date(sync.lastSync).toLocaleString('zh-CN', { hour12: false });
+  }
+
+  function refreshSyncUI() {
+    var el = document.querySelector('[data-sync-status]');
+    if (el) el.textContent = syncText();
+  }
+
+  function syncPayload() {
+    return JSON.stringify({ updatedAt: state.meta.updatedAt || Date.now(), state: state });
+  }
+
+  function handlePushJson(j) {
+    if (j && j.id) {
+      sync.gistId = j.id;
+      sync.lastSync = Date.now();
+      sync.lastError = '';
+      saveSync();
+    } else {
+      sync.lastError = (j && j.message) || '同步失败';
+    }
+    refreshSyncUI();
+  }
+
+  function syncPush() {
+    if (!sync.token) return;
+    var payload = syncPayload();
+    if (sync.gistId) {
+      fetch('https://api.github.com/gists/' + sync.gistId, {
+        method: 'PATCH',
+        headers: ghHeaders(),
+        body: JSON.stringify({ files: { 'kaoyan-planner.json': { content: payload } } })
+      }).then(function (r) { return r.json(); }).then(handlePushJson).catch(function () {
+        sync.lastError = '网络不可用';
+        refreshSyncUI();
+      });
+    } else {
+      fetch('https://api.github.com/gists', {
+        method: 'POST',
+        headers: ghHeaders(),
+        body: JSON.stringify({
+          description: 'kaoyan-planner 数据同步（私有）',
+          public: false,
+          files: { 'kaoyan-planner.json': { content: payload } }
+        })
+      }).then(function (r) { return r.json(); }).then(handlePushJson).catch(function () {
+        sync.lastError = '网络不可用';
+        refreshSyncUI();
+      });
+    }
+  }
+
+  function scheduleSync() {
+    if (!sync.token || applyingRemote) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncPush, 3000);
+  }
+
+  function applyRemote(text) {
+    var obj;
+    try { obj = JSON.parse(text); } catch (e) { return; }
+    if (!obj || !obj.state || !Array.isArray(obj.state.tasks) || !obj.state.tasks.length) return;
+    var localAt = (state.meta && state.meta.updatedAt) || 0;
+    if (!firstRun && (obj.updatedAt || 0) <= localAt) return;
+    applyingRemote = true;
+    state = normalize(obj.state);
+    try {
+      var raw = JSON.stringify(state);
+      localStorage.setItem(STORAGE_KEY, raw);
+      localStorage.setItem(BACKUP_KEY, raw);
+    } catch (e) { /* ignore */ }
+    applyingRemote = false;
+    sync.lastSync = Date.now();
+    sync.lastError = '';
+    saveSync();
+    try { render(); } catch (e) { /* ignore */ }
+    refreshSyncUI();
+    toast('已从云端恢复最新数据');
+  }
+
+  function syncPull(then) {
+    if (!sync.token || !sync.gistId) { if (then) then(); return; }
+    fetch('https://api.github.com/gists/' + sync.gistId, { headers: ghHeaders() })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || !j.files) {
+          if (j && j.message === 'Not Found') { sync.gistId = ''; saveSync(); }
+          sync.lastError = (j && j.message) || '读取失败';
+          refreshSyncUI();
+          if (then) then();
+          return;
+        }
+        var f = j.files['kaoyan-planner.json'];
+        if (f && f.content) { applyRemote(f.content); if (then) then(); return; }
+        if (f && f.raw_url) {
+          fetch(f.raw_url).then(function (r) { return r.text(); }).then(function (t) {
+            applyRemote(t);
+            if (then) then();
+          }).catch(function () { if (then) then(); });
+          return;
+        }
+        if (then) then();
+      })
+      .catch(function () {
+        sync.lastError = '网络不可用';
+        refreshSyncUI();
+        if (then) then();
+      });
+  }
+
+  function syncFindGist(cb) {
+    if (sync.gistId) { cb(); return; }
+    fetch('https://api.github.com/gists?per_page=100', { headers: ghHeaders() })
+      .then(function (r) { return r.json(); })
+      .then(function (list) {
+        if (!Array.isArray(list)) {
+          sync.lastError = (list && list.message) || '读取失败';
+          refreshSyncUI();
+          cb();
+          return;
+        }
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].files && list[i].files['kaoyan-planner.json']) {
+            sync.gistId = list[i].id;
+            saveSync();
+            break;
+          }
+        }
+        cb();
+      })
+      .catch(function () {
+        sync.lastError = '网络不可用';
+        refreshSyncUI();
+        cb();
+      });
+  }
+
+  function syncConnect(token) {
+    var t = (token || '').trim();
+    if (!t) { toast('请先粘贴 GitHub Token'); return; }
+    sync.token = t;
+    sync.lastError = '';
+    saveSync();
+    refreshSyncUI();
+    /* 先找回已有 Gist（清缓存后只填 Token 也能恢复），再上传 */
+    syncFindGist(function () {
+      syncPull(function () {
+        syncPush();
+        toast('已开启云同步');
+      });
+    });
+  }
+
+  function syncNow() {
+    if (!sync.token) { toast('请先填写 Token 并开启'); return; }
+    syncFindGist(function () {
+      syncPull(function () { syncPush(); toast('同步完成'); });
+    });
+  }
+
+  function syncOff() {
+    sync.token = '';
+    sync.gistId = '';
+    sync.lastSync = 0;
+    sync.lastError = '';
+    saveSync();
+    refreshSyncUI();
+    toast('已关闭云同步（云端 Gist 保留，可随时重新连接）');
+  }
+
+  /* 启动时若已连接：先拉云端，再决定是否需要推送 */
+  if (sync.token && sync.gistId) {
+    setTimeout(function () { syncPull(null); }, 600);
   }
 
   /* ================= UI 状态 ================= */
@@ -734,6 +936,24 @@
       '</div>' +
 
       '<div class="card">' +
+        '<div class="card__head"><div class="card__title">' + icon('refresh') + '云同步（私有 Gist）</div></div>' +
+        '<p class="hint" data-sync-status>' + esc(syncText()) + '</p>' +
+        '<div class="form-grid">' +
+          '<label class="field"><span>GitHub Token（仅勾选 gist 权限）</span>' +
+            '<input type="password" data-sync-token autocomplete="off" placeholder="ghp_… 或 github_pat_…" value=""></label>' +
+        '</div>' +
+        '<div class="settings-acts">' +
+          '<div class="setting-line"><div><b>开启 / 更换 Token</b><span>粘贴后自动创建私有 Gist 并上传当前进度</span></div>' +
+            '<button class="btn btn--sm" data-action="sync-connect">开启</button></div>' +
+          '<div class="setting-line"><div><b>立即同步</b><span>先拉云端最新，再把本机进度传上去</span></div>' +
+            '<button class="btn btn--sm" data-action="sync-now">' + icon('refresh') + '同步</button></div>' +
+          '<div class="setting-line"><div><b>关闭云同步</b><span>只断开本机，云端 Gist 数据保留</span></div>' +
+            '<button class="btn btn--sm btn--danger" data-action="sync-off">关闭</button></div>' +
+        '</div>' +
+        '<p class="hint">Token 只保存在本机浏览器，用来读写你账号下的私有 Gist（别人看不到）。清缓存、换 iPad/手机后重新填同一个 Token 即可恢复全部进度。</p>' +
+      '</div>' +
+
+      '<div class="card">' +
         '<div class="card__head"><div class="card__title">' + icon('upload') + '数据管理</div></div>' +
         '<div class="settings-acts">' +
           '<div class="setting-line"><div><b>导出备份</b><span>下载完整 JSON，换设备可再导入</span></div>' +
@@ -746,7 +966,7 @@
             '<button class="btn btn--sm btn--danger" data-action="clear-all">清空</button></div>' +
         '</div>' +
         '<input type="file" id="importFile" accept="application/json,.json" hidden>' +
-        '<p class="hint">数据保存在当前浏览器的本地存储中。清理浏览器数据前请先导出备份。</p>' +
+        '<p class="hint">数据同时保存在本机浏览器与（开启后的）云端私有 Gist。清理浏览器数据前建议先确认「上次同步」时间较新。</p>' +
       '</div>' +
     '</div>';
   }
@@ -1138,6 +1358,18 @@
           break;
         case 'export':
           exportJSON();
+          break;
+        case 'sync-connect': {
+          var tokenInput = document.querySelector('[data-sync-token]');
+          syncConnect(tokenInput ? tokenInput.value : '');
+          if (tokenInput) tokenInput.value = '';
+          break;
+        }
+        case 'sync-now':
+          syncNow();
+          break;
+        case 'sync-off':
+          syncOff();
           break;
         case 'import-file': {
           var fileInput = $('#importFile');
