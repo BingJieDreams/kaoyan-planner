@@ -24,10 +24,18 @@ window.SEED = (function () {
   var seq = 0;
   var raw = [];
 
+  /* 任务 ID 由「日期 + 时段 + 标题」推导，保证同一个任务在不同版本里 ID 不变，
+     这样以后调整计划内容时，已完成的进度不会错位 */
+  function hashId(s) {
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) { h = ((h << 5) + h + s.charCodeAt(i)) | 0; }
+    return (h >>> 0).toString(36);
+  }
+
   function add(o) {
     seq += 1;
     raw.push({
-      id: 'seed-' + seq,
+      id: 'seed-' + hashId((o.date || '') + '|' + (o.slot || '') + '|' + o.title),
       order: seq,
       subject: o.subject,
       group: o.group || '',
