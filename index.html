@@ -34,6 +34,7 @@
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3L12 4z"/><path d="M12 10v4M12 17h.01"/></symbol>
   <symbol id="i-drag" viewBox="0 0 24 24"><path d="M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5"/><path d="M8 8h7M8 12h5"/></symbol>
 </svg>
 
 <div class="app">
@@ -46,6 +47,9 @@
     <nav class="nav" aria-label="主导航">
       <button class="nav__item" data-action="nav" data-view="today">
         <svg class="icon"><use href="#i-today"/></svg><span>今日</span><em class="nav__badge" id="navBadgeToday" hidden></em>
+      </button>
+      <button class="nav__item" data-action="nav" data-view="vocab">
+        <svg class="icon"><use href="#i-book"/></svg><span>背单词</span><em class="nav__badge" id="navBadgeVocab" hidden></em>
       </button>
       <button class="nav__item" data-action="nav" data-view="schedule">
         <svg class="icon"><use href="#i-calendar"/></svg><span>排期</span>
@@ -87,6 +91,7 @@
     </header>
 
     <section class="view" id="view-today" aria-live="polite"></section>
+    <section class="view" id="view-vocab"></section>
     <section class="view" id="view-schedule"></section>
     <section class="view" id="view-tasks"></section>
     <section class="view" id="view-review"></section>
@@ -96,6 +101,7 @@
 
 <nav class="tabbar" aria-label="底部导航">
   <button data-action="nav" data-view="today"><svg class="icon"><use href="#i-today"/></svg><span>今日</span><i class="tabbar__dot" id="tabDot" hidden></i></button>
+  <button data-action="nav" data-view="vocab"><svg class="icon"><use href="#i-book"/></svg><span>单词</span></button>
   <button data-action="nav" data-view="schedule"><svg class="icon"><use href="#i-calendar"/></svg><span>排期</span></button>
   <button data-action="nav" data-view="tasks"><svg class="icon"><use href="#i-tasks"/></svg><span>任务库</span></button>
   <button data-action="nav" data-view="review"><svg class="icon"><use href="#i-chart"/></svg><span>复盘</span></button>
@@ -120,6 +126,7 @@
 
 <script src="assets/js/seed.js"></script>
 <script src="assets/js/scheduler.js"></script>
+<script src="assets/js/words.js"></script>
 <script src="assets/js/app.js"></script>
 </body>
 </html>
