@@ -68,6 +68,7 @@
       notes: {},
       routine: {},
       routineItems: window.SEED.defaultRoutine(),
+      vocab: { cursor: 0, newPerDay: 30, progress: {} },
       meta: { createdAt: new Date().toISOString() }
     };
   }
@@ -386,11 +387,13 @@
     view: 'today',
     filter: { subject: 'all', status: 'all', q: '' },
     dragId: null,
-    saveTimer: null
+    saveTimer: null,
+    vocab: null   /* 背单词会话：{ queue, i, show, active, stats, reps } */
   };
 
   var TITLES = {
     today: '今日',
+    vocab: '背单词',
     schedule: '排期',
     tasks: '任务库',
     review: '复盘',
@@ -451,6 +454,13 @@
     var dotEl = $('#tabDot');
     if (dotEl) dotEl.hidden = bad === 0;
 
+    var vBadge = $('#navBadgeVocab');
+    if (vBadge) {
+      var vLeft = vocabTodo();
+      vBadge.hidden = vLeft === 0;
+      vBadge.textContent = vLeft > 99 ? '99+' : String(vLeft);
+    }
+
     var sideDays = $('#sideDays');
     if (sideDays) sideDays.textContent = left;
     var sideExam = $('#sideExam');
@@ -458,6 +468,7 @@
 
     var subText = {
       today: fmtFull(t) + ' · 今天必须完成的任务',
+      vocab: '每个词过 7 轮：先看单词，点开再看中文',
       schedule: '11.11–12.11 固定日程，可拖动调整',
       tasks: '共 ' + state.tasks.length + ' 项任务',
       review: '完成率、错题与阶段验收',
@@ -477,6 +488,7 @@
     });
 
     if (ui.view === 'today') $('#view-today').innerHTML = todayHTML();
+    if (ui.view === 'vocab') $('#view-vocab').innerHTML = vocabHTML();
     if (ui.view === 'schedule') $('#view-schedule').innerHTML = scheduleHTML();
     if (ui.view === 'tasks') $('#view-tasks').innerHTML = tasksHTML();
     if (ui.view === 'review') $('#view-review').innerHTML = reviewHTML();
@@ -980,6 +992,8 @@
             '<button class="btn btn--sm" data-action="import-file">' + icon('upload') + '选择文件</button></div>' +
           '<div class="setting-line"><div><b>恢复初始任务</b><span>按清单重建任务，清空完成记录</span></div>' +
             '<button class="btn btn--sm" data-action="reset-seed">恢复</button></div>' +
+          '<div class="setting-line"><div><b>重置单词进度</b><span>清空 7 轮记录，从第一天重新背</span></div>' +
+            '<button class="btn btn--sm btn--danger" data-action="vocab-reset">重置</button></div>' +
           '<div class="setting-line"><div><b>清空全部数据</b><span>任务、备注、记录全部删除</span></div>' +
             '<button class="btn btn--sm btn--danger" data-action="clear-all">清空</button></div>' +
         '</div>' +
@@ -987,6 +1001,246 @@
         '<p class="hint">数据同时保存在本机浏览器与（开启后的）云端私有 Gist。清理浏览器数据前建议先确认「上次同步」时间较新。</p>' +
       '</div>' +
     '</div>';
+  }
+
+  /* ================= 背单词 · 七轮记忆 ================= */
+  var VOCAB_ROUNDS = 7;
+  var VOCAB_GAPS = [1, 2, 3, 5, 7, 10, 0]; /* 通过第 n 轮后隔几天再抽到 */
+  var WORDS = window.WORDS || [];
+  var WORD_MAP = {};
+  var WORD_ORDER = {};
+  WORDS.forEach(function (x, i) {
+    var k = String(x.w || '').toLowerCase();
+    if (!k) return;
+    WORD_MAP[k] = x;
+    WORD_ORDER[k] = i;
+  });
+
+  function vocabOf() {
+    if (!state.vocab || typeof state.vocab !== 'object') {
+      state.vocab = { cursor: 0, newPerDay: 30, progress: {} };
+    }
+    var v = state.vocab;
+    if (typeof v.cursor !== 'number' || !isFinite(v.cursor)) v.cursor = 0;
+    if (!v.newPerDay) v.newPerDay = 30;
+    if (!v.progress || typeof v.progress !== 'object') v.progress = {};
+    return v;
+  }
+
+  /* 今日牌组：到期复习词 + 当天配额内的新词 */
+  function vocabDeck() {
+    var v = vocabOf(), t = todayISO();
+    var due = [], fresh = [], newToday = 0;
+    Object.keys(v.progress).forEach(function (k) {
+      var p = v.progress[k] || {};
+      if (p.first === t) newToday += 1;
+      if ((p.r || 0) >= VOCAB_ROUNDS) return;
+      if (!p.due || p.due <= t) due.push(k);
+    });
+    due.sort(function (a, b) {
+      var da = (v.progress[a] || {}).due || '';
+      var db = (v.progress[b] || {}).due || '';
+      return da.localeCompare(db);
+    });
+    var quota = Math.max(0, v.newPerDay - newToday);
+    for (var i = v.cursor; i < WORDS.length && fresh.length < quota; i++) {
+      var k = String(WORDS[i].w || '').toLowerCase();
+      if (!k || v.progress[k]) continue;
+      fresh.push(k);
+    }
+    return { due: due, fresh: fresh, newToday: newToday, quota: v.newPerDay, total: due.length + fresh.length };
+  }
+
+  function vocabTodo() {
+    if (!WORDS.length) return 0;
+    return vocabDeck().total;
+  }
+
+  function vocabStats() {
+    var v = vocabOf();
+    var total = WORDS.length, done = 0, learning = 0;
+    var byRound = [0, 0, 0, 0, 0, 0, 0, 0];
+    Object.keys(v.progress).forEach(function (k) {
+      var r = Math.min(VOCAB_ROUNDS, Math.max(0, (v.progress[k] || {}).r || 0));
+      byRound[r] += 1;
+      if (r >= VOCAB_ROUNDS) done += 1;
+      else learning += 1;
+    });
+    return { total: total, done: done, learning: learning, byRound: byRound, pct: total ? Math.round(done / total * 100) : 0 };
+  }
+
+  /* 七轮漏斗：第 i 行 = 至少过完 i 轮的词数 */
+  function vocabRoundBars(st) {
+    var html = '';
+    for (var i = 1; i <= VOCAB_ROUNDS; i++) {
+      var n = 0;
+      for (var r = i; r <= VOCAB_ROUNDS; r++) n += st.byRound[r];
+      var pct = st.total ? Math.min(100, Math.round(n / st.total * 100)) : 0;
+      html += '<div class="vround">' +
+        '<span class="vround__k">第 ' + i + ' 轮</span>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+        '<span class="vround__n">' + n + '</span>' +
+      '</div>';
+    }
+    return html;
+  }
+
+  function vocabCardHTML(d) {
+    var s = ui.vocab;
+    if (s && s.active) {
+      var key = s.queue[s.i];
+      var word = WORD_MAP[key] || { w: key, m: [] };
+      var p = vocabOf().progress[key] || {};
+      var round = Math.min(VOCAB_ROUNDS, (p.r || 0) + 1);
+      var pct = s.queue.length ? Math.round(s.i / s.queue.length * 100) : 0;
+      var html = '<div class="vocab__bar"><div class="bar"><i style="width:' + pct + '%"></i></div>' +
+        '<span>' + (s.i + 1) + ' / ' + s.queue.length + '</span></div>' +
+        '<div class="vocab__tags">' +
+          '<span class="pill pill--accent">第 ' + round + ' / ' + VOCAB_ROUNDS + ' 轮</span>' +
+          (p.r ? '' : '<span class="pill">新词</span>') +
+          '<span class="vocab__score">认识 ' + s.stats.know + ' · 模糊 ' + s.stats.fuzzy + ' · 不认识 ' + s.stats.no + '</span>' +
+        '</div>' +
+        '<div class="vocab__word">' + esc(word.w) + '</div>';
+      if (!s.show) {
+        html += '<button class="vocab__flip" data-action="vocab-flip">点击显示中文</button>';
+      } else {
+        html += '<div class="vocab__mean">' + (word.m.length
+          ? word.m.map(function (m) { return '<div>' + esc(m) + '</div>'; }).join('')
+          : '<div class="dim">这个词在词库里没有释义</div>') + '</div>' +
+          '<div class="vocab__grades">' +
+            '<button class="grade grade--no" data-action="vocab-grade" data-grade="no"><b>不认识</b><em>今天再抽一次</em></button>' +
+            '<button class="grade grade--fuzzy" data-action="vocab-grade" data-grade="fuzzy"><b>模糊</b><em>本轮不算过</em></button>' +
+            '<button class="grade grade--know" data-action="vocab-grade" data-grade="know"><b>认识</b><em>' + (round + 1 > VOCAB_ROUNDS ? '进入掌握' : '进第 ' + (round + 1) + ' 轮') + '</em></button>' +
+          '</div>';
+      }
+      return html;
+    }
+
+    if (s && s.finished) {
+      return '<div class="vocab__idle">' +
+        '<b>这轮背完了</b>' +
+        '<span>认识 ' + s.stats.know + ' · 模糊 ' + s.stats.fuzzy + ' · 不认识 ' + s.stats.no + '</span>' +
+        (d.total
+          ? '<button class="btn btn--primary btn--block" data-action="vocab-start">再背 ' + d.total + ' 个</button>'
+          : '<span class="dim">今天的量完成了，明天按节奏继续</span>') +
+      '</div>';
+    }
+
+    return '<div class="vocab__idle">' +
+      '<b>' + (d.total ? '今天要背 ' + d.total + ' 个' : '今天没有到期的单词') + '</b>' +
+      '<span>复习 ' + d.due.length + ' · 新词 ' + d.fresh.length + '（今日已学 ' + d.newToday + ' / ' + vocabOf().newPerDay + '）</span>' +
+      (d.total
+        ? '<button class="btn btn--primary btn--block" data-action="vocab-start">开始背单词</button>'
+        : '<span class="dim">明天会按记忆节奏把该复习的词再抽给你</span>') +
+    '</div>';
+  }
+
+  function vocabHTML() {
+    if (!WORDS.length) {
+      return '<div class="card"><div class="empty">词库还没加载出来，刷新一下页面再试</div></div>';
+    }
+    var st = vocabStats();
+    var d = vocabDeck();
+    var perDay = Number(vocabOf().newPerDay);
+    var opts = [10, 20, 30, 40, 60].map(function (n) {
+      return '<option value="' + n + '"' + (perDay === n ? ' selected' : '') + '>' + n + ' 词/天</option>';
+    }).join('');
+
+    return '<div class="stats">' +
+        '<div class="stat"><b>' + st.total + '</b><span>词库总量</span></div>' +
+        '<div class="stat"><b>' + st.done + '</b><span>已过 7 轮</span></div>' +
+        '<div class="stat"><b>' + st.learning + '</b><span>在学单词</span></div>' +
+        '<div class="stat"><b>' + d.total + '</b><span>今日待背</span></div>' +
+      '</div>' +
+      '<div class="vocab-grid">' +
+        '<div class="card vocab-panel">' + vocabCardHTML(d) + '</div>' +
+        '<div class="stack">' +
+          '<div class="card">' +
+            '<div class="card__head"><div class="card__title">' + icon('chart') + '七轮漏斗</div>' +
+              '<span class="card__sub">掌握 ' + st.pct + '%</span></div>' +
+            '<div class="vrounds">' + vocabRoundBars(st) + '</div>' +
+            '<p class="hint">记忆节奏：认识 → 1 天 → 2 天 → 3 天 → 5 天 → 7 天 → 10 天。每认对一次进一轮，隔得越久还认得出，才算真的记住；模糊 / 不认识会回到今天重抽。</p>' +
+          '</div>' +
+          '<div class="card">' +
+            '<div class="card__head"><div class="card__title">' + icon('settings') + '今日节奏</div></div>' +
+            '<div class="setting-line"><div><b>每天新词</b><span>今天已学 ' + d.newToday + ' 个</span></div>' +
+              '<select class="select-sm" data-vocab-new>' + opts + '</select></div>' +
+            '<div class="setting-line"><div><b>到期复习</b><span>' + d.due.length + ' 个词到期待复习</span></div>' +
+              '<button class="btn btn--sm" data-action="vocab-start">' + icon('refresh') + '开始</button></div>' +
+            '<p class="hint">进度会自动保存在本机，并随云同步备份；换设备或清缓存后重新打开也在。</p>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function vocabStart() {
+    var d = vocabDeck();
+    var q = d.due.concat(d.fresh);
+    if (!q.length) { toast('今天没有需要背的单词'); return; }
+    ui.vocab = { queue: q, i: 0, show: false, active: true, finished: false, stats: { know: 0, fuzzy: 0, no: 0 }, reps: {} };
+    render();
+  }
+
+  function vocabFlip() {
+    if (!ui.vocab || !ui.vocab.active) return;
+    ui.vocab.show = true;
+    render();
+  }
+
+  function vocabGrade(grade) {
+    var s = ui.vocab;
+    if (!s || !s.active) return;
+    var key = s.queue[s.i];
+    if (!key) return;
+    var v = vocabOf();
+    var t = todayISO();
+    var p = v.progress[key];
+    if (!p) {
+      p = v.progress[key] = { r: 0, first: t, due: t, seen: 0 };
+      v.cursor = Math.max(v.cursor, (WORD_ORDER[key] || 0) + 1);
+    }
+    p.seen = (p.seen || 0) + 1;
+    p.last = t;
+
+    if (grade === 'know') {
+      p.r = Math.min(VOCAB_ROUNDS, (p.r || 0) + 1);
+      p.due = p.r >= VOCAB_ROUNDS ? '' : addDays(t, VOCAB_GAPS[p.r - 1] || 1);
+      s.stats.know += 1;
+    } else if (grade === 'fuzzy') {
+      p.due = t;
+      s.stats.fuzzy += 1;
+    } else {
+      p.r = Math.max(0, (p.r || 0) - 1);
+      p.due = t;
+      s.stats.no += 1;
+    }
+
+    /* 没认对的词本轮再抽一次（最多回炉 2 次，避免原地打转） */
+    if (grade !== 'know') {
+      s.reps[key] = (s.reps[key] || 0) + 1;
+      if (s.reps[key] <= 2) s.queue.push(key);
+    }
+
+    s.i += 1;
+    s.show = false;
+    if (s.i >= s.queue.length) {
+      s.active = false;
+      s.finished = true;
+      saveState();
+      render();
+      toast('这轮背完：认识 ' + s.stats.know + ' 个');
+      return;
+    }
+    saveState();
+    render();
+  }
+
+  function vocabReset() {
+    state.vocab = { cursor: 0, newPerDay: 30, progress: {} };
+    ui.vocab = null;
+    saveState();
+    render();
+    toast('单词进度已重置');
   }
 
   /* ================= 弹窗 ================= */
@@ -1418,6 +1672,20 @@
             toast('已清空并重置');
           });
           break;
+        case 'vocab-start':
+          vocabStart();
+          break;
+        case 'vocab-flip':
+          vocabFlip();
+          break;
+        case 'vocab-grade':
+          vocabGrade(el.dataset.grade);
+          break;
+        case 'vocab-reset':
+          confirmAction('重置单词进度', '所有单词的轮次、到期时间会清空，回到第一天重新开始。确定继续？', function () {
+            vocabReset();
+          });
+          break;
         case 'close-modal':
           closeModal();
           break;
@@ -1477,6 +1745,15 @@
         saveState();
         render();
         toast('设置已更新');
+        return;
+      }
+
+      if (el.matches('[data-vocab-new]')) {
+        var n = parseInt(el.value, 10) || 30;
+        vocabOf().newPerDay = n;
+        saveState();
+        render();
+        toast('每天新词改为 ' + n + ' 个');
         return;
       }
 
