@@ -68,7 +68,7 @@
       notes: {},
       routine: {},
       routineItems: window.SEED.defaultRoutine(),
-      vocab: { cursor: 0, newPerDay: 0, planStart: '', progress: {} },
+      vocab: { cursor: 0, newPerDay: 0, extra: 150, planStart: '', progress: {} },
       meta: { createdAt: new Date().toISOString() }
     };
   }
@@ -1006,7 +1006,7 @@
   /* ================= 背单词 · 七轮记忆（20 天冲刺） ================= */
   var VOCAB_ROUNDS = 7;
   var VOCAB_PLAN_DAYS = 20;                     /* 全部单词的 7 轮必须在 20 天内走完 */
-  var VOCAB_INTRO_DAYS = VOCAB_PLAN_DAYS - 6;   /* 前 14 天开完全部新词，后 6 天留给第 2–7 轮 */
+  var VOCAB_INTRO_DAYS = 10;                    /* 前 10 天开完全部新词，后 10 天留给复习收轮 */
   var VOCAB_WEIGHTS = [1, 1, 2, 3, 4, 6];       /* 6 个复习间隔的扩张比例，会按剩余天数压缩 */
   var WORDS = window.WORDS || [];
   var WORD_MAP = {};
@@ -1020,11 +1020,12 @@
 
   function vocabOf() {
     if (!state.vocab || typeof state.vocab !== 'object') {
-      state.vocab = { cursor: 0, newPerDay: 0, planStart: '', progress: {} };
+      state.vocab = { cursor: 0, newPerDay: 0, extra: 150, planStart: '', progress: {} };
     }
     var v = state.vocab;
     if (typeof v.cursor !== 'number' || !isFinite(v.cursor)) v.cursor = 0;
     if (!v.progress || typeof v.progress !== 'object') v.progress = {};
+    if (typeof v.extra !== 'number' || !isFinite(v.extra)) v.extra = 150;
     if (!v.planStart) v.planStart = todayISO();
     v.newPerDay = vocabQuota(v);
     return v;
@@ -1041,7 +1042,7 @@
     };
   }
 
-  /* 每天新词配额：剩余新词 ÷ 剩余「开新词」天数，保证 14 天内开完全部词 */
+  /* 每天新词配额：剩余新词 ÷ 剩余「开新词」天数，保证 10 天内开完全部词 */
   function vocabQuota(v) {
     var remain = Math.max(0, WORDS.length - v.cursor);
     if (!remain) return 0;
@@ -1063,14 +1064,15 @@
     return Math.max(1, Math.min(g, daysLeft - (gapsLeft - 1)));
   }
 
-  /* 今日牌组：到期复习词 + 当天配额内的新词 */
+  /* 今日牌组：到期复习词 + 当天配额内的新词 + 加练（抽最久没看的已学词回看） */
   function vocabDeck() {
     var v = vocabOf(), t = todayISO();
     var plan = vocabPlan();
-    var due = [], fresh = [], newToday = 0;
+    var due = [], fresh = [], extra = [], learned = [], newToday = 0;
     Object.keys(v.progress).forEach(function (k) {
       var p = v.progress[k] || {};
       if (p.first === t) newToday += 1;
+      if ((p.r || 0) >= 1) learned.push(k);
       if ((p.r || 0) >= VOCAB_ROUNDS) return;
       /* 到期，或原定复习日超出计划期 → 都提到今天，避免拖出 20 天 */
       if (!p.due || p.due <= t || p.due > plan.end) due.push(k);
@@ -1086,12 +1088,31 @@
       if (!k || v.progress[k]) continue;
       fresh.push(k);
     }
-    return { due: due, fresh: fresh, newToday: newToday, quota: v.newPerDay, total: due.length + fresh.length };
+    /* 加练：不计轮次，只挑「最久没看」的已学词，和当天的复习、新词穿插着上 */
+    var extraN = Math.max(0, Math.round(v.extra || 0));
+    if (extraN && learned.length) {
+      var skip = {};
+      due.forEach(function (x) { skip[x] = 1; });
+      fresh.forEach(function (x) { skip[x] = 1; });
+      extra = learned.filter(function (x) { return !skip[x]; });
+      extra.sort(function (a, b) {
+        var la = (v.progress[a] || {}).last || '';
+        var lb = (v.progress[b] || {}).last || '';
+        return la.localeCompare(lb);
+      });
+      extra = extra.slice(0, extraN);
+    }
+    return {
+      due: due, fresh: fresh, extra: extra, learned: learned.length,
+      newToday: newToday, quota: v.newPerDay,
+      total: due.length + fresh.length + extra.length
+    };
   }
 
   function vocabTodo() {
     if (!WORDS.length) return 0;
-    return vocabDeck().total;
+    var d = vocabDeck();
+    return d.due.length + d.fresh.length;   /* 加练不催进度，不计入角标 */
   }
 
   function vocabStats() {
@@ -1126,7 +1147,9 @@
   function vocabCardHTML(d) {
     var s = ui.vocab;
     if (s && s.active) {
-      var key = s.queue[s.i];
+      var item = s.queue[s.i] || {};
+      var key = item.k || item;
+      var isExtra = !!item.x;
       var word = WORD_MAP[key] || { w: key, m: [] };
       var p = vocabOf().progress[key] || {};
       var round = Math.min(VOCAB_ROUNDS, (p.r || 0) + 1);
@@ -1134,8 +1157,9 @@
       var html = '<div class="vocab__bar"><div class="bar"><i style="width:' + pct + '%"></i></div>' +
         '<span>' + (s.i + 1) + ' / ' + s.queue.length + '</span></div>' +
         '<div class="vocab__tags">' +
-          '<span class="pill pill--accent">第 ' + round + ' / ' + VOCAB_ROUNDS + ' 轮</span>' +
-          (p.r ? '' : '<span class="pill">新词</span>') +
+          (isExtra
+            ? '<span class="pill pill--warn">加练</span><span class="pill">已过 ' + (p.r || 0) + ' 轮</span>'
+            : '<span class="pill pill--accent">第 ' + round + ' / ' + VOCAB_ROUNDS + ' 轮</span>' + (p.r ? '' : '<span class="pill">新词</span>')) +
           '<span class="vocab__score">认识 ' + s.stats.know + ' · 模糊 ' + s.stats.fuzzy + ' · 不认识 ' + s.stats.no + '</span>' +
         '</div>' +
         '<div class="vocab__word">' + esc(word.w) + '</div>';
@@ -1146,9 +1170,9 @@
           ? word.m.map(function (m) { return '<div>' + esc(m) + '</div>'; }).join('')
           : '<div class="dim">这个词在词库里没有释义</div>') + '</div>' +
           '<div class="vocab__grades">' +
-            '<button class="grade grade--no" data-action="vocab-grade" data-grade="no"><b>不认识</b><em>今天再抽一次</em></button>' +
-            '<button class="grade grade--fuzzy" data-action="vocab-grade" data-grade="fuzzy"><b>模糊</b><em>本轮不算过</em></button>' +
-            '<button class="grade grade--know" data-action="vocab-grade" data-grade="know"><b>认识</b><em>' + (round + 1 > VOCAB_ROUNDS ? '进入掌握' : '进第 ' + (round + 1) + ' 轮') + '</em></button>' +
+            '<button class="grade grade--no" data-action="vocab-grade" data-grade="no"><b>不认识</b><em>' + (isExtra ? '拉回今天' : '今天再抽一次') + '</em></button>' +
+            '<button class="grade grade--fuzzy" data-action="vocab-grade" data-grade="fuzzy"><b>模糊</b><em>' + (isExtra ? '拉回今天' : '本轮不算过') + '</em></button>' +
+            '<button class="grade grade--know" data-action="vocab-grade" data-grade="know"><b>认识</b><em>' + (isExtra ? '加深一次' : (round + 1 > VOCAB_ROUNDS ? '进入掌握' : '进第 ' + (round + 1) + ' 轮')) + '</em></button>' +
           '</div>';
       }
       return html;
@@ -1166,7 +1190,7 @@
 
     return '<div class="vocab__idle">' +
       '<b>' + (d.total ? '今天要背 ' + d.total + ' 个' : '今天没有到期的单词') + '</b>' +
-      '<span>复习 ' + d.due.length + ' · 新词 ' + d.fresh.length + '（今日已学 ' + d.newToday + ' / ' + vocabOf().newPerDay + '）</span>' +
+      '<span>复习 ' + d.due.length + ' · 新词 ' + d.fresh.length + ' · 加练 ' + d.extra.length + '（今日新词已学 ' + d.newToday + ' / ' + d.quota + '）</span>' +
       (d.total
         ? '<button class="btn btn--primary btn--block" data-action="vocab-start">开始背单词</button>'
         : '<span class="dim">明天会按记忆节奏把该复习的词再抽给你</span>') +
@@ -1211,16 +1235,38 @@
               '<span class="pill' + (remainNew ? '' : ' pill--ok') + '">剩 ' + remainNew + '</span></div>' +
             '<div class="setting-line"><div><b>到期复习</b><span>' + d.due.length + ' 个词今天该复习</span></div>' +
               '<button class="btn btn--sm" data-action="vocab-start">' + icon('refresh') + '开始</button></div>' +
-            '<p class="hint">新词按考频从高到低发，越靠前越是高频词。进度自动保存在本机并随云同步备份。</p>' +
+            '<div class="setting-line"><div><b>每日加练</b><span>额外抽最久没看的已学词，不计轮次</span></div>' +
+              '<select class="select-sm" data-vocab-extra>' + vocabExtraOpts(vocabOf().extra) + '</select></div>' +
+            '<p class="hint">新词按考频从高到低发，越靠前越是高频词；前 ' + VOCAB_INTRO_DAYS + ' 天开完 ' + st.total + ' 词，后 ' + (VOCAB_PLAN_DAYS - VOCAB_INTRO_DAYS) + ' 天专注复习收轮，复习与新词同场穿插。进度自动保存在本机并随云同步备份。</p>' +
             '<button class="btn btn--ghost btn--sm btn--block" data-action="vocab-replan" style="margin-top:10px">把今天设为计划第 1 天</button>' +
           '</div>' +
         '</div>' +
       '</div>';
   }
 
+  /* 加练量选项 */
+  function vocabExtraOpts(cur) {
+    return [0, 100, 150, 200, 300].map(function (n) {
+      return '<option value="' + n + '"' + (n === cur ? ' selected' : '') + '>' + (n ? n + ' 个' : '关闭') + '</option>';
+    }).join('');
+  }
+
+  /* 复习词与新词按比例交错排，避免「先背一堆旧词、再背一堆新词」 */
+  function mergeDeck(a, b) {
+    var out = [], i = 0, j = 0;
+    while (i < a.length || j < b.length) {
+      if (j >= b.length) { out.push({ k: a[i++], x: 0 }); continue; }
+      if (i >= a.length) { out.push({ k: b[j++], x: 0 }); continue; }
+      if (i * b.length <= j * a.length) out.push({ k: a[i++], x: 0 });
+      else out.push({ k: b[j++], x: 0 });
+    }
+    return out;
+  }
+
   function vocabStart() {
     var d = vocabDeck();
-    var q = d.due.concat(d.fresh);
+    var q = mergeDeck(d.due, d.fresh);
+    d.extra.forEach(function (k) { q.push({ k: k, x: 1 }); });
     if (!q.length) { toast('今天没有需要背的单词'); return; }
     ui.vocab = { queue: q, i: 0, show: false, active: true, finished: false, stats: { know: 0, fuzzy: 0, no: 0 }, reps: {} };
     render();
@@ -1235,7 +1281,9 @@
   function vocabGrade(grade) {
     var s = ui.vocab;
     if (!s || !s.active) return;
-    var key = s.queue[s.i];
+    var item = s.queue[s.i] || {};
+    var key = item.k || item;
+    var isExtra = !!item.x;
     if (!key) return;
     var v = vocabOf();
     var t = todayISO();
@@ -1247,7 +1295,18 @@
     p.seen = (p.seen || 0) + 1;
     p.last = t;
 
-    if (grade === 'know') {
+    if (isExtra) {
+      /* 加练不计轮次：认识只是加固；没认对就拉回今天重新排 */
+      if (grade === 'know') {
+        s.stats.know += 1;
+      } else if (grade === 'fuzzy') {
+        p.due = t;
+        s.stats.fuzzy += 1;
+      } else {
+        p.due = t;
+        s.stats.no += 1;
+      }
+    } else if (grade === 'know') {
       p.r = Math.min(VOCAB_ROUNDS, (p.r || 0) + 1);
       p.due = p.r >= VOCAB_ROUNDS ? '' : addDays(t, vocabGap(p.r));
       s.stats.know += 1;
@@ -1263,7 +1322,7 @@
     /* 没认对的词本轮再抽一次（最多回炉 2 次，避免原地打转） */
     if (grade !== 'know') {
       s.reps[key] = (s.reps[key] || 0) + 1;
-      if (s.reps[key] <= 2) s.queue.push(key);
+      if (s.reps[key] <= 2) s.queue.push({ k: key, x: item.x });
     }
 
     s.i += 1;
@@ -1288,7 +1347,7 @@
   }
 
   function vocabReset() {
-    state.vocab = { cursor: 0, newPerDay: 0, planStart: todayISO(), progress: {} };
+    state.vocab = { cursor: 0, newPerDay: 0, extra: 150, planStart: todayISO(), progress: {} };
     ui.vocab = null;
     saveState();
     render();
@@ -1788,6 +1847,15 @@
       if (el.id === 'statusFilter') {
         ui.filter.status = el.value;
         render();
+        return;
+      }
+
+      if (el.matches('[data-vocab-extra]')) {
+        var extra = parseInt(el.value, 10);
+        vocabOf().extra = isFinite(extra) ? Math.max(0, extra) : 0;
+        saveState();
+        render();
+        toast(vocabOf().extra ? '每日加练改为 ' + vocabOf().extra + ' 个' : '已关闭每日加练');
         return;
       }
 
