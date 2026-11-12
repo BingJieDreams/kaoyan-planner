@@ -1,5 +1,5 @@
 /* 离线缓存：部署到 http(s) 后自动生效 */
-var CACHE = 'chongci-planner-v3';
+var CACHE = 'chongci-planner-v4';
 var ASSETS = [
   './',
   './index.html',
@@ -32,15 +32,15 @@ self.addEventListener('activate', function (e) {
 
 self.addEventListener('fetch', function (e) {
   if (e.request.method !== 'GET') return;
+  /* 网络优先：在线时永远拿最新文件，离线时回退到缓存 */
   e.respondWith(
-    caches.match(e.request).then(function (hit) {
-      if (hit) return hit;
-      return fetch(e.request).then(function (res) {
-        var copy = res.clone();
-        caches.open(CACHE).then(function (c) { c.put(e.request, copy); }).catch(function () {});
-        return res;
-      }).catch(function () {
-        return caches.match('./index.html');
+    fetch(e.request).then(function (res) {
+      var copy = res.clone();
+      caches.open(CACHE).then(function (c) { c.put(e.request, copy); }).catch(function () {});
+      return res;
+    }).catch(function () {
+      return caches.match(e.request).then(function (hit) {
+        return hit || caches.match('./index.html');
       });
     })
   );
