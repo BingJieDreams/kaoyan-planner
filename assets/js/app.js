@@ -193,8 +193,10 @@
   function syncText() {
     if (!sync.token) return '未开启。开启后数据自动备份到你的私有 Gist，清缓存或换设备都能恢复。';
     if (sync.lastError) return '同步异常：' + sync.lastError;
-    if (!sync.lastSync) return '已连接，等待首次同步…';
-    return '上次同步：' + new Date(sync.lastSync).toLocaleString('zh-CN', { hour12: false });
+    if (!sync.gistId) return '已填写 Token，但还没连上云端 Gist（点「立即同步」）';
+    if (!sync.lastSync) return '已连接云端 Gist（' + sync.gistId.slice(0, 8) + '），等待首次同步…';
+    return '已连接 Gist ' + sync.gistId.slice(0, 8) + ' · 上次同步：' +
+      new Date(sync.lastSync).toLocaleString('zh-CN', { hour12: false });
   }
 
   function refreshSyncUI() {
@@ -262,12 +264,13 @@
     syncTimer = setTimeout(syncPush, 3000);
   }
 
-  function applyRemote(text) {
+  function applyRemote(text, force) {
     var obj;
-    try { obj = JSON.parse(text); } catch (e) { return; }
-    if (!obj || !obj.state || !Array.isArray(obj.state.tasks) || !obj.state.tasks.length) return;
+    try { obj = JSON.parse(text); } catch (e) { return false; }
+    if (!obj || !obj.state || !Array.isArray(obj.state.tasks) || !obj.state.tasks.length) return false;
     var localAt = (state.meta && state.meta.updatedAt) || 0;
-    if (!firstRun && (obj.updatedAt || 0) <= localAt) return;
+    /* 普通同步：云端必须比本机新才覆盖；强制拉取：云端一律覆盖本机 */
+    if (!force && !firstRun && (obj.updatedAt || 0) <= localAt) return false;
     applyingRemote = true;
     state = normalize(obj.state);
     try {
@@ -282,10 +285,12 @@
     try { render(); } catch (e) { /* ignore */ }
     refreshSyncUI();
     toast('已从云端恢复最新数据');
+    return true;
   }
 
-  function syncPull(then) {
-    if (!sync.token || !sync.gistId) { if (then) then(); return; }
+  function syncPull(force, then) {
+    var done = function (applied) { if (then) then(applied); };
+    if (!sync.token || !sync.gistId) { done(false); return; }
     fetch('https://api.github.com/gists/' + sync.gistId, { headers: ghHeaders() })
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -293,24 +298,23 @@
           if (j && j.message === 'Not Found') { sync.gistId = ''; saveSync(); }
           sync.lastError = (j && j.message) || '读取失败';
           refreshSyncUI();
-          if (then) then();
+          done(false);
           return;
         }
         var f = j.files['kaoyan-planner.json'];
-        if (f && f.content) { applyRemote(f.content); if (then) then(); return; }
+        if (f && f.content) { done(applyRemote(f.content, force)); return; }
         if (f && f.raw_url) {
           fetch(f.raw_url).then(function (r) { return r.text(); }).then(function (t) {
-            applyRemote(t);
-            if (then) then();
-          }).catch(function () { if (then) then(); });
+            done(applyRemote(t, force));
+          }).catch(function () { done(false); });
           return;
         }
-        if (then) then();
+        done(false);
       })
       .catch(function () {
         sync.lastError = '网络不可用';
         refreshSyncUI();
-        if (then) then();
+        done(false);
       });
   }
 
@@ -348,12 +352,17 @@
     sync.lastError = '';
     saveSync();
     refreshSyncUI();
-    /* 先找回已有 Gist（清缓存后只填 Token 也能恢复），再上传 */
+    /* 先找回已有 Gist（清缓存后只填 Token 也能恢复），再决定要不要上传 */
     syncFindGist(function () {
-      syncPull(function () {
-        syncPush(function (ok) {
-          toast(ok ? '云同步已开启' : '云同步失败：' + sync.lastError);
-        });
+      var hadGist = !!sync.gistId;
+      syncPull(false, function (applied) {
+        if (hadGist) {
+          /* 云端已有数据：不自动上传，避免把旧的本机数据盖掉云端 */
+          toast(applied ? '已从云端恢复数据' : '云端不比本机新，未覆盖；要强制拉取请点「拉取」');
+          if (applied) syncPush(function () {});
+        } else {
+          syncPush(function (ok) { toast(ok ? '云同步已开启（新建 Gist）' : '云同步失败：' + sync.lastError); });
+        }
       });
     });
   }
@@ -361,8 +370,29 @@
   function syncNow() {
     if (!sync.token) { toast('请先填写 Token 并开启'); return; }
     syncFindGist(function () {
-      syncPull(function () {
+      syncPull(false, function () {
         syncPush(function (ok) { toast(ok ? '同步完成' : '同步失败：' + sync.lastError); });
+      });
+    });
+  }
+
+  /* 强制以云端为准：换设备 / 一端落后时用这个 */
+  function syncForcePull() {
+    if (!sync.token) { toast('请先填写 Token 并开启'); return; }
+    syncFindGist(function () {
+      if (!sync.gistId) { toast('没找到云端数据，请先「上传本机」'); return; }
+      syncPull(true, function (applied) {
+        toast(applied ? '已用云端数据覆盖本机' : '云端没有可用数据，本机保持原样');
+      });
+    });
+  }
+
+  /* 强制上传本机覆盖云端 */
+  function syncForcePush() {
+    if (!sync.token) { toast('请先填写 Token 并开启'); return; }
+    syncFindGist(function () {
+      syncPush(function (ok) {
+        toast(ok ? '已用本机数据覆盖云端' : '上传失败：' + sync.lastError);
       });
     });
   }
@@ -379,7 +409,7 @@
 
   /* 启动时若已连接：先拉云端，再决定是否需要推送 */
   if (sync.token && sync.gistId) {
-    setTimeout(function () { syncPull(null); }, 600);
+    setTimeout(function () { syncPull(false, null); }, 600);
   }
 
   /* ================= UI 状态 ================= */
@@ -975,11 +1005,16 @@
         '<div class="settings-acts">' +
           '<div class="setting-line"><div><b>开启 / 更换 Token</b><span>粘贴后自动创建私有 Gist 并上传当前进度</span></div>' +
             '<button class="btn btn--sm" data-action="sync-connect">开启</button></div>' +
-          '<div class="setting-line"><div><b>立即同步</b><span>先拉云端最新，再把本机进度传上去</span></div>' +
+          '<div class="setting-line"><div><b>立即同步</b><span>两端都较新时，以时间较新的一份为准</span></div>' +
             '<button class="btn btn--sm" data-action="sync-now">' + icon('refresh') + '同步</button></div>' +
+          '<div class="setting-line"><div><b>以云端为准</b><span>用云端数据覆盖本机（换设备后点这个）</span></div>' +
+            '<button class="btn btn--sm" data-action="sync-pull">' + icon('download') + '拉取</button></div>' +
+          '<div class="setting-line"><div><b>上传本机</b><span>用本机数据覆盖云端</span></div>' +
+            '<button class="btn btn--sm" data-action="sync-push">' + icon('upload') + '上传</button></div>' +
           '<div class="setting-line"><div><b>关闭云同步</b><span>只断开本机，云端 Gist 数据保留</span></div>' +
             '<button class="btn btn--sm btn--danger" data-action="sync-off">关闭</button></div>' +
         '</div>' +
+        '<p class="hint">同步是「整份覆盖」而不是逐条合并：两端都改过时，只能有一端的版本留下来。所以换设备、或在 A 端改完想让 B 端跟上时，请在 B 端点「以云端为准」。</p>' +
         '<p class="hint">Token 只保存在本机浏览器，用来读写你账号下的私有 Gist（别人看不到）。清缓存、换 iPad/手机后重新填同一个 Token 即可恢复全部进度。</p>' +
       '</div>' +
 
@@ -1751,6 +1786,16 @@
         }
         case 'sync-now':
           syncNow();
+          break;
+        case 'sync-pull':
+          confirmAction('以云端为准', '会用云端 Gist 里的数据整份覆盖本机：本机没上传过的改动会丢失。确定拉取？', function () {
+            syncForcePull();
+          });
+          break;
+        case 'sync-push':
+          confirmAction('上传本机', '会用本机当前数据整份覆盖云端 Gist（另一台设备之前的改动会被覆盖）。确定上传？', function () {
+            syncForcePush();
+          });
           break;
         case 'sync-off':
           syncOff();
