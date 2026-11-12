@@ -68,7 +68,7 @@
       notes: {},
       routine: {},
       routineItems: window.SEED.defaultRoutine(),
-      vocab: { cursor: 0, newPerDay: 30, progress: {} },
+      vocab: { cursor: 0, newPerDay: 0, planStart: '', progress: {} },
       meta: { createdAt: new Date().toISOString() }
     };
   }
@@ -468,7 +468,7 @@
 
     var subText = {
       today: fmtFull(t) + ' · 今天必须完成的任务',
-      vocab: '每个词过 7 轮：先看单词，点开再看中文',
+      vocab: '20 天走完 7 轮：先看单词，点开再看中文',
       schedule: '11.11–12.11 固定日程，可拖动调整',
       tasks: '共 ' + state.tasks.length + ' 项任务',
       review: '完成率、错题与阶段验收',
@@ -1003,9 +1003,11 @@
     '</div>';
   }
 
-  /* ================= 背单词 · 七轮记忆 ================= */
+  /* ================= 背单词 · 七轮记忆（20 天冲刺） ================= */
   var VOCAB_ROUNDS = 7;
-  var VOCAB_GAPS = [1, 2, 3, 5, 7, 10, 0]; /* 通过第 n 轮后隔几天再抽到 */
+  var VOCAB_PLAN_DAYS = 20;                     /* 全部单词的 7 轮必须在 20 天内走完 */
+  var VOCAB_INTRO_DAYS = VOCAB_PLAN_DAYS - 6;   /* 前 14 天开完全部新词，后 6 天留给第 2–7 轮 */
+  var VOCAB_WEIGHTS = [1, 1, 2, 3, 4, 6];       /* 6 个复习间隔的扩张比例，会按剩余天数压缩 */
   var WORDS = window.WORDS || [];
   var WORD_MAP = {};
   var WORD_ORDER = {};
@@ -1018,24 +1020,60 @@
 
   function vocabOf() {
     if (!state.vocab || typeof state.vocab !== 'object') {
-      state.vocab = { cursor: 0, newPerDay: 30, progress: {} };
+      state.vocab = { cursor: 0, newPerDay: 0, planStart: '', progress: {} };
     }
     var v = state.vocab;
     if (typeof v.cursor !== 'number' || !isFinite(v.cursor)) v.cursor = 0;
-    if (!v.newPerDay) v.newPerDay = 30;
     if (!v.progress || typeof v.progress !== 'object') v.progress = {};
+    if (!v.planStart) v.planStart = todayISO();
+    v.newPerDay = vocabQuota(v);
     return v;
+  }
+
+  /* 20 天计划：开始日、结束日、新词开完的最后一天 */
+  function vocabPlan() {
+    var v = state.vocab || {};
+    var start = v.planStart || todayISO();
+    return {
+      start: start,
+      end: addDays(start, VOCAB_PLAN_DAYS - 1),
+      introEnd: addDays(start, VOCAB_INTRO_DAYS - 1)
+    };
+  }
+
+  /* 每天新词配额：剩余新词 ÷ 剩余「开新词」天数，保证 14 天内开完全部词 */
+  function vocabQuota(v) {
+    var remain = Math.max(0, WORDS.length - v.cursor);
+    if (!remain) return 0;
+    var plan = vocabPlan();
+    var left = Math.max(1, diffDays(todayISO(), plan.introEnd) + 1);
+    return Math.max(1, Math.ceil(remain / left));
+  }
+
+  /* 当前这一轮通过后隔几天再抽：按计划剩余天数压缩间隔，确保第 7 轮不晚于计划结束日 */
+  function vocabGap(roundsDone) {
+    var gapsLeft = VOCAB_ROUNDS - roundsDone;   /* 还要排几个间隔（含下一次） */
+    if (gapsLeft <= 0) return 0;
+    var daysLeft = diffDays(todayISO(), vocabPlan().end);
+    if (daysLeft < gapsLeft) return 1;
+    var w = VOCAB_WEIGHTS.slice(VOCAB_ROUNDS - 1 - gapsLeft);
+    var tot = 0;
+    w.forEach(function (x) { tot += x; });
+    var g = Math.round(daysLeft * w[0] / tot);
+    return Math.max(1, Math.min(g, daysLeft - (gapsLeft - 1)));
   }
 
   /* 今日牌组：到期复习词 + 当天配额内的新词 */
   function vocabDeck() {
     var v = vocabOf(), t = todayISO();
+    var plan = vocabPlan();
     var due = [], fresh = [], newToday = 0;
     Object.keys(v.progress).forEach(function (k) {
       var p = v.progress[k] || {};
       if (p.first === t) newToday += 1;
       if ((p.r || 0) >= VOCAB_ROUNDS) return;
-      if (!p.due || p.due <= t) due.push(k);
+      /* 到期，或原定复习日超出计划期 → 都提到今天，避免拖出 20 天 */
+      if (!p.due || p.due <= t || p.due > plan.end) due.push(k);
     });
     due.sort(function (a, b) {
       var da = (v.progress[a] || {}).due || '';
@@ -1141,10 +1179,11 @@
     }
     var st = vocabStats();
     var d = vocabDeck();
-    var perDay = Number(vocabOf().newPerDay);
-    var opts = [10, 20, 30, 40, 60].map(function (n) {
-      return '<option value="' + n + '"' + (perDay === n ? ' selected' : '') + '>' + n + ' 词/天</option>';
-    }).join('');
+    var plan = vocabPlan();
+    var t = todayISO();
+    var dayNo = Math.min(VOCAB_PLAN_DAYS, Math.max(1, diffDays(plan.start, t) + 1));
+    var planLeft = Math.max(0, diffDays(t, plan.end));
+    var remainNew = Math.max(0, WORDS.length - vocabOf().cursor);
 
     return '<div class="stats">' +
         '<div class="stat"><b>' + st.total + '</b><span>词库总量</span></div>' +
@@ -1157,17 +1196,23 @@
         '<div class="stack">' +
           '<div class="card">' +
             '<div class="card__head"><div class="card__title">' + icon('chart') + '七轮漏斗</div>' +
-              '<span class="card__sub">掌握 ' + st.pct + '%</span></div>' +
+              '<span class="card__sub">掌握 ' + st.pct + '% · 第 ' + dayNo + ' / ' + VOCAB_PLAN_DAYS + ' 天</span></div>' +
             '<div class="vrounds">' + vocabRoundBars(st) + '</div>' +
-            '<p class="hint">记忆节奏：认识 → 1 天 → 2 天 → 3 天 → 5 天 → 7 天 → 10 天。每认对一次进一轮，隔得越久还认得出，才算真的记住；模糊 / 不认识会回到今天重抽。</p>' +
+            '<p class="hint">20 天冲刺：间隔按 1 · 1 · 2 · 3 · 4 · 6 的比例展开，并随剩余天数自动压缩，保证每个词的第 7 轮不晚于 ' + fmtCN(plan.end) + '。每认对一次进一轮；模糊 / 不认识回到今天重抽。</p>' +
           '</div>' +
           '<div class="card">' +
-            '<div class="card__head"><div class="card__title">' + icon('settings') + '今日节奏</div></div>' +
-            '<div class="setting-line"><div><b>每天新词</b><span>今天已学 ' + d.newToday + ' 个</span></div>' +
-              '<select class="select-sm" data-vocab-new>' + opts + '</select></div>' +
-            '<div class="setting-line"><div><b>到期复习</b><span>' + d.due.length + ' 个词到期待复习</span></div>' +
+            '<div class="card__head"><div class="card__title">' + icon('settings') + '20 天计划</div>' +
+              '<span class="card__sub">剩 ' + planLeft + ' 天</span></div>' +
+            '<div class="setting-line"><div><b>计划周期</b><span>' + fmtCN(plan.start) + ' → ' + fmtCN(plan.end) + '（共 ' + VOCAB_PLAN_DAYS + ' 天）</span></div>' +
+              '<span class="pill pill--accent">第 ' + dayNo + ' 天</span></div>' +
+            '<div class="setting-line"><div><b>每天新词</b><span>自动分配 · 今天已学 ' + d.newToday + ' 个</span></div>' +
+              '<b>' + d.quota + ' 个</b></div>' +
+            '<div class="setting-line"><div><b>新词开完期限</b><span>全部 ' + st.total + ' 词在 ' + fmtCN(plan.introEnd) + ' 前开完</span></div>' +
+              '<span class="pill' + (remainNew ? '' : ' pill--ok') + '">剩 ' + remainNew + '</span></div>' +
+            '<div class="setting-line"><div><b>到期复习</b><span>' + d.due.length + ' 个词今天该复习</span></div>' +
               '<button class="btn btn--sm" data-action="vocab-start">' + icon('refresh') + '开始</button></div>' +
-            '<p class="hint">进度会自动保存在本机，并随云同步备份；换设备或清缓存后重新打开也在。</p>' +
+            '<p class="hint">新词按考频从高到低发，越靠前越是高频词。进度自动保存在本机并随云同步备份。</p>' +
+            '<button class="btn btn--ghost btn--sm btn--block" data-action="vocab-replan" style="margin-top:10px">把今天设为计划第 1 天</button>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -1204,7 +1249,7 @@
 
     if (grade === 'know') {
       p.r = Math.min(VOCAB_ROUNDS, (p.r || 0) + 1);
-      p.due = p.r >= VOCAB_ROUNDS ? '' : addDays(t, VOCAB_GAPS[p.r - 1] || 1);
+      p.due = p.r >= VOCAB_ROUNDS ? '' : addDays(t, vocabGap(p.r));
       s.stats.know += 1;
     } else if (grade === 'fuzzy') {
       p.due = t;
@@ -1235,8 +1280,15 @@
     render();
   }
 
+  function vocabReplan() {
+    vocabOf().planStart = todayISO();
+    saveState();
+    render();
+    toast('已从今天重新计时：20 天内走完 7 轮');
+  }
+
   function vocabReset() {
-    state.vocab = { cursor: 0, newPerDay: 30, progress: {} };
+    state.vocab = { cursor: 0, newPerDay: 0, planStart: todayISO(), progress: {} };
     ui.vocab = null;
     saveState();
     render();
@@ -1681,6 +1733,9 @@
         case 'vocab-grade':
           vocabGrade(el.dataset.grade);
           break;
+        case 'vocab-replan':
+          vocabReplan();
+          break;
         case 'vocab-reset':
           confirmAction('重置单词进度', '所有单词的轮次、到期时间会清空，回到第一天重新开始。确定继续？', function () {
             vocabReset();
@@ -1745,15 +1800,6 @@
         saveState();
         render();
         toast('设置已更新');
-        return;
-      }
-
-      if (el.matches('[data-vocab-new]')) {
-        var n = parseInt(el.value, 10) || 30;
-        vocabOf().newPerDay = n;
-        saveState();
-        render();
-        toast('每天新词改为 ' + n + ' 个');
         return;
       }
 
