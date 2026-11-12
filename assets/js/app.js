@@ -4,6 +4,7 @@
 
   /* ================= 基础工具 ================= */
   var STORAGE_KEY = 'kaoyan-planner-v2';
+  var BACKUP_KEY = 'kaoyan-planner-v2-backup';
   var STATUS = { red: '未完成', yellow: '进行中', green: '已完成' };
   var WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
@@ -100,16 +101,33 @@
     return s;
   }
 
-  function loadState() {
+  var recoveredFromBackup = false;
+
+  function parseSaved(raw) {
+    if (!raw) return null;
     try {
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return null;
       var parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.tasks)) return null;
+      if (!parsed || !Array.isArray(parsed.tasks) || !parsed.tasks.length) return null;
       return normalize(parsed);
     } catch (e) {
       return null;
     }
+  }
+
+  function loadState() {
+    var main = null;
+    var bak = null;
+    try { main = parseSaved(localStorage.getItem(STORAGE_KEY)); } catch (e) { main = null; }
+    try { bak = parseSaved(localStorage.getItem(BACKUP_KEY)); } catch (e) { bak = null; }
+    if (main && bak) {
+      var a = (main.meta && main.meta.updatedAt) || 0;
+      var b = (bak.meta && bak.meta.updatedAt) || 0;
+      if (b > a) { recoveredFromBackup = true; return bak; }
+      return main;
+    }
+    if (main) return main;
+    if (bak) { recoveredFromBackup = true; return bak; }
+    return null;
   }
 
   var state = loadState();
@@ -120,14 +138,33 @@
   }
 
   function saveState() {
+    state.meta = state.meta || {};
+    state.meta.updatedAt = Date.now();
+    var raw;
+    try { raw = JSON.stringify(state); } catch (e) { return; }
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, raw);
+      try { localStorage.setItem(BACKUP_KEY, raw); } catch (e2) { /* 备份失败不影响主存储 */ }
     } catch (e) {
+      try { localStorage.setItem(BACKUP_KEY, raw); } catch (e3) { /* ignore */ }
       toast('保存失败：本地存储空间不足');
     }
   }
 
   if (firstRun) saveState();
+
+  /* 双保险：离开页面 / 切到后台时立即落盘；申请持久化存储，避免被浏览器自动清理 */
+  window.addEventListener('pagehide', function () { saveState(); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') saveState();
+  });
+  try {
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  } catch (e) { /* ignore */ }
+
+  if (recoveredFromBackup) {
+    setTimeout(function () { toast('已从本地备份恢复数据'); }, 800);
+  }
 
   /* ================= UI 状态 ================= */
   var ui = {
@@ -1119,7 +1156,10 @@
           break;
         case 'clear-all':
           confirmAction('清空全部数据', '任务、进度、备注、错题记录会全部删除且无法恢复，建议先导出备份。确定继续？', function () {
-            try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* ignore */ }
+            try {
+              localStorage.removeItem(STORAGE_KEY);
+              localStorage.removeItem(BACKUP_KEY);
+            } catch (err) { /* ignore */ }
             state = defaultState();
             window.Scheduler.plan(state);
             saveState();
