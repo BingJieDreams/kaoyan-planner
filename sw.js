@@ -1,5 +1,5 @@
 /* 离线缓存：部署到 http(s) 后自动生效 */
-var CACHE = 'chongci-planner-v5';
+var CACHE = 'chongci-planner-v6';
 var ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ var ASSETS = [
   './assets/css/style.css',
   './assets/js/seed.js',
   './assets/js/scheduler.js',
+  './assets/js/words.js',
   './assets/js/app.js'
 ];
 
