@@ -205,30 +205,43 @@
     return JSON.stringify({ updatedAt: state.meta.updatedAt || Date.now(), state: state });
   }
 
+  function mapSyncError(msg) {
+    var m = String(msg || '');
+    if (/Bad credentials|401|Requires authentication/i.test(m)) return 'Token 无效或已过期，请重新粘贴（注意不要带空格/换行）';
+    if (/rate limit/i.test(m)) return '请求过于频繁，请稍后再试';
+    if (/Not Found|404/i.test(m)) return '云端数据不存在或无权访问';
+    return m || '同步失败';
+  }
+
   function handlePushJson(j) {
-    if (j && j.id) {
+    var ok = !!(j && j.id);
+    if (ok) {
       sync.gistId = j.id;
       sync.lastSync = Date.now();
       sync.lastError = '';
       saveSync();
     } else {
-      sync.lastError = (j && j.message) || '同步失败';
+      sync.lastError = mapSyncError(j && j.message);
     }
     refreshSyncUI();
+    return ok;
   }
 
-  function syncPush() {
-    if (!sync.token) return;
+  function syncPush(then) {
+    if (!sync.token) { if (then) then(false); return; }
     var payload = syncPayload();
+    var done = function (ok) { if (then) then(ok); };
+    var fail = function () {
+      sync.lastError = '网络不可用';
+      refreshSyncUI();
+      done(false);
+    };
     if (sync.gistId) {
       fetch('https://api.github.com/gists/' + sync.gistId, {
         method: 'PATCH',
         headers: ghHeaders(),
         body: JSON.stringify({ files: { 'kaoyan-planner.json': { content: payload } } })
-      }).then(function (r) { return r.json(); }).then(handlePushJson).catch(function () {
-        sync.lastError = '网络不可用';
-        refreshSyncUI();
-      });
+      }).then(function (r) { return r.json(); }).then(function (j) { done(handlePushJson(j)); }).catch(fail);
     } else {
       fetch('https://api.github.com/gists', {
         method: 'POST',
@@ -238,10 +251,7 @@
           public: false,
           files: { 'kaoyan-planner.json': { content: payload } }
         })
-      }).then(function (r) { return r.json(); }).then(handlePushJson).catch(function () {
-        sync.lastError = '网络不可用';
-        refreshSyncUI();
-      });
+      }).then(function (r) { return r.json(); }).then(function (j) { done(handlePushJson(j)); }).catch(fail);
     }
   }
 
@@ -309,7 +319,7 @@
       .then(function (r) { return r.json(); })
       .then(function (list) {
         if (!Array.isArray(list)) {
-          sync.lastError = (list && list.message) || '读取失败';
+          sync.lastError = mapSyncError(list && list.message);
           refreshSyncUI();
           cb();
           return;
@@ -331,7 +341,7 @@
   }
 
   function syncConnect(token) {
-    var t = (token || '').trim();
+    var t = String(token || '').replace(/[^\x21-\x7E]/g, '');
     if (!t) { toast('请先粘贴 GitHub Token'); return; }
     sync.token = t;
     sync.lastError = '';
@@ -340,8 +350,9 @@
     /* 先找回已有 Gist（清缓存后只填 Token 也能恢复），再上传 */
     syncFindGist(function () {
       syncPull(function () {
-        syncPush();
-        toast('已开启云同步');
+        syncPush(function (ok) {
+          toast(ok ? '云同步已开启' : '云同步失败：' + sync.lastError);
+        });
       });
     });
   }
@@ -349,7 +360,9 @@
   function syncNow() {
     if (!sync.token) { toast('请先填写 Token 并开启'); return; }
     syncFindGist(function () {
-      syncPull(function () { syncPush(); toast('同步完成'); });
+      syncPull(function () {
+        syncPush(function (ok) { toast(ok ? '同步完成' : '同步失败：' + sync.lastError); });
+      });
     });
   }
 
@@ -528,9 +541,14 @@
       .filter(function (x) { return x.date && x.date < t && x.status !== 'green'; })
       .sort(function (a, b) { return a.date.localeCompare(b.date); });
 
-    var done = mine.filter(function (x) { return x.status === 'green'; }).length;
+    /* 今天补完的逾期任务也要计入“已完成”，否则补完反而从列表消失、完成数还是 0 */
+    var overdueDoneToday = state.tasks.filter(function (x) {
+      return x.date && x.date < t && x.status === 'green' && x.doneAt && isoOf(new Date(x.doneAt)) === t;
+    });
+    var done = mine.filter(function (x) { return x.status === 'green'; }).length + overdueDoneToday.length;
     var mid = mine.filter(function (x) { return x.status === 'yellow'; }).length;
-    var pct = mine.length ? Math.round(done / mine.length * 100) : 0;
+    var total = mine.length + overdue.length + overdueDoneToday.length;
+    var pct = total ? Math.round(done / total * 100) : 0;
 
     var html = '';
 
@@ -550,7 +568,7 @@
 
     /* 数据条 */
     html += '<div class="stats" style="margin-top:16px">' +
-      '<div class="stat"><b>' + mine.length + '</b><span>今日必做</span></div>' +
+      '<div class="stat"><b>' + total + '</b><span>今日必做</span></div>' +
       '<div class="stat"><b>' + done + '</b><span>已完成</span></div>' +
       '<div class="stat"><b>' + overdue.length + '</b><span>逾期未完成</span></div>' +
       '<div class="stat"><b>' + totalMinutes(mine) + '</b><span>今日计划分钟</span></div>' +
@@ -940,7 +958,7 @@
         '<p class="hint" data-sync-status>' + esc(syncText()) + '</p>' +
         '<div class="form-grid">' +
           '<label class="field"><span>GitHub Token（仅勾选 gist 权限）</span>' +
-            '<input type="password" data-sync-token autocomplete="off" placeholder="ghp_… 或 github_pat_…" value=""></label>' +
+            '<input type="password" data-sync-token autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ghp_… 或 github_pat_…" value=""></label>' +
         '</div>' +
         '<div class="settings-acts">' +
           '<div class="setting-line"><div><b>开启 / 更换 Token</b><span>粘贴后自动创建私有 Gist 并上传当前进度</span></div>' +
@@ -1202,6 +1220,7 @@
     var t = state.tasks.find(function (x) { return x.id === id; });
     if (!t || !STATUS[status]) return;
     t.status = status;
+    t.doneAt = status === 'green' ? new Date().toISOString() : '';
     saveState();
     render();
   }
