@@ -1,5 +1,5 @@
 /* 离线缓存：部署到 http(s) 后自动生效 */
-var CACHE = 'chongci-planner-v2';
+var CACHE = 'chongci-planner-v3';
 var ASSETS = [
   './',
   './index.html',
