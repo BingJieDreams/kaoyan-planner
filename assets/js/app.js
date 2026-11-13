@@ -185,6 +185,24 @@
   }
   migrateCsPlan();
 
+  /* 408 背诵（07:30）随主任务同步改版：按日期换成与当天科目一致的背诵内容，
+     不动完成状态（早上背完不该被改回未完成）。 */
+  function migrateCsBack() {
+    if (!window.SEED || typeof window.SEED.csBackPlan !== 'function') return;
+    state.meta = state.meta || {};
+    if (state.meta.csBack === 'v2') return;
+    var plan = window.SEED.csBackPlan();
+    state.tasks.forEach(function (task) {
+      if (!task || task.subject !== 'cs' || task.slot !== '0700' || !task.date) return;
+      var p = plan[task.date];
+      if (!p) return;
+      task.title = '408 背诵：' + p;
+    });
+    state.meta.csBack = 'v2';
+    saveState();
+  }
+  migrateCsBack();
+
   /* 双保险：离开页面 / 切到后台时立即落盘；申请持久化存储，避免被浏览器自动清理 */
   window.addEventListener('pagehide', function () { saveState(); });
   document.addEventListener('visibilitychange', function () {
