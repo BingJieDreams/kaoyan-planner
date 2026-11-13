@@ -155,6 +155,36 @@
 
   if (firstRun) saveState();
 
+  /* 408 计划改版：11.13 起按 DS / 计组 / OS / 计网 二刷 → 11.21 起近十年真题两遍。
+     旧存档里的 14:00 主任务按日期换成新标题，今天及以后的完成状态重置，更早的记录不动。 */
+  function migrateCsPlan() {
+    if (!window.SEED || typeof window.SEED.csPlan !== 'function') return;
+    state.meta = state.meta || {};
+    if (state.meta.csPlan === 'v2') return;
+    var plan = window.SEED.csPlan();
+    var t = todayISO();
+    state.tasks.forEach(function (task) {
+      if (!task || task.subject !== 'cs' || task.slot !== '1400' || !task.date) return;
+      var p = plan[task.date];
+      if (!p) return;
+      task.title = p.title;
+      task.detail = p.detail;
+      task.group = p.group;
+      if (task.date >= t && task.status !== 'red') task.status = 'red';
+    });
+    if (Array.isArray(state.checkpoints)) {
+      window.SEED.checkpoints().forEach(function (c) {
+        var hit = null;
+        state.checkpoints.forEach(function (x) { if (x && x.id === c.id) hit = x; });
+        if (hit) { hit.title = c.title; hit.date = c.date; }
+        else state.checkpoints.push(Object.assign({}, c));
+      });
+    }
+    state.meta.csPlan = 'v2';
+    saveState();
+  }
+  migrateCsPlan();
+
   /* 双保险：离开页面 / 切到后台时立即落盘；申请持久化存储，避免被浏览器自动清理 */
   window.addEventListener('pagehide', function () { saveState(); });
   document.addEventListener('visibilitychange', function () {
@@ -1029,6 +1059,8 @@
             '<button class="btn btn--sm" data-action="reset-seed">恢复</button></div>' +
           '<div class="setting-line"><div><b>重置单词进度</b><span>清空 7 轮记录，从第一天重新背</span></div>' +
             '<button class="btn btn--sm btn--danger" data-action="vocab-reset">重置</button></div>' +
+          '<div class="setting-line"><div><b>导出单词表</b><span>.txt，每行一个单词，可导入「不背单词」自制词书</span></div>' +
+            '<button class="btn btn--sm" data-action="vocab-export">' + icon('download') + '导出</button></div>' +
           '<div class="setting-line"><div><b>清空全部数据</b><span>任务、备注、记录全部删除</span></div>' +
             '<button class="btn btn--sm btn--danger" data-action="clear-all">清空</button></div>' +
         '</div>' +
@@ -1379,6 +1411,27 @@
     saveState();
     render();
     toast('已从今天重新计时：20 天内走完 7 轮');
+  }
+
+  /* 导出 .txt：每行一个单词（不背单词等自制词书要求纯词表） */
+  function vocabExportTxt() {
+    if (!WORDS.length) { toast('词库还没加载出来，请刷新页面再试'); return; }
+    var out = [];
+    WORDS.forEach(function (x) {
+      var w = String(x.w || '').trim();
+      if (w) out.push(w);
+    });
+    var blob = new Blob([out.join('\r\n') + '\r\n'], { type: 'text/plain;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '英语二单词表.txt';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      URL.revokeObjectURL(a.href);
+      if (a.parentNode) a.parentNode.removeChild(a);
+    }, 1500);
+    toast('已导出 ' + out.length + ' 个单词');
   }
 
   function vocabReset() {
@@ -1844,6 +1897,9 @@
           confirmAction('重置单词进度', '所有单词的轮次、到期时间会清空，回到第一天重新开始。确定继续？', function () {
             vocabReset();
           });
+          break;
+        case 'vocab-export':
+          vocabExportTxt();
           break;
         case 'close-modal':
           closeModal();
